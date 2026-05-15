@@ -5,7 +5,6 @@ import { findRelevantProducts, formatProductsForContext } from '../../../lib/pro
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-// Simple per-IP rate limit
 const rateLimits = new Map();
 const RATE_LIMIT = 30;
 const RATE_WINDOW = 60 * 60 * 1000;
@@ -27,7 +26,7 @@ export async function POST(req) {
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
     if (!checkRateLimit(ip)) {
       return Response.json(
-        { error: "We're getting a lot of messages right now! Please try again in a moment, or drop us a WhatsApp on 07397 244450." },
+        { error: "We're getting a lot of messages right now. Try again in a moment, or hit the WhatsApp button below." },
         { status: 429 }
       );
     }
@@ -46,18 +45,33 @@ export async function POST(req) {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 800,
+      model: 'claude-haiku-4-5',
+      max_tokens: 600,
       system: fullSystemPrompt,
       messages: messages.map(m => ({ role: m.role, content: m.content }))
     });
 
     const reply = response.content[0]?.type === 'text' ? response.content[0].text : '';
 
+    // Determine which products to show as cards based on what Claude actually mentioned
+    const replyLower = reply.toLowerCase();
+    const mentionedProducts = products.filter(p => {
+      const nameTokens = p.name.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      // Show card if Claude mentioned at least 2 significant words from the name
+      const matches = nameTokens.filter(t => replyLower.includes(t)).length;
+      return matches >= 2 || replyLower.includes(p.brand?.toLowerCase());
+    });
+
+    // If Claude mentioned products but none matched, show top 3 anyway
+    const cardsToShow = mentionedProducts.length > 0
+      ? mentionedProducts.slice(0, 4)
+      : (products.length > 0 && /recommend|suggest|i'd go with|try the/.test(replyLower)
+          ? products.slice(0, 3)
+          : []);
+
     return Response.json({
       reply,
-      productsFound: products.length,
-      products: products.slice(0, 4).map(p => ({
+      products: cardsToShow.map(p => ({
         name: p.name,
         price: p.price,
         wasPrice: p.wasPrice,
@@ -69,7 +83,7 @@ export async function POST(req) {
   } catch (error) {
     console.error('Chat API error:', error);
     return Response.json(
-      { error: "Something went wrong on our end. Try again in a moment, or message us directly — Info@voyagershook.com or WhatsApp 07397 244450." },
+      { error: "Something went wrong on our end. Try again in a moment, or message us using the WhatsApp button below." },
       { status: 500 }
     );
   }
